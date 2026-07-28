@@ -47,23 +47,47 @@ nginx -t
 
 # 启动虚拟显示器
 Xvfb :99 -screen 0 1280x900x24 &
+XVFB_PID=$!
 export DISPLAY=:99
 sleep 2
 
-# 启动带密码的 VNC 服务
+# 启动带密码的 VNC 服务；关闭 X DAMAGE，避免云端虚拟显示器黑屏或不刷新
 x11vnc \
     -display :99 \
     -rfbauth "$DATA_DIR/vnc.pass" \
+    -noxdamage \
     -forever \
     -shared \
     -rfbport 5900 &
+VNC_PID=$!
 sleep 2
 
 # 启动 noVNC，仅供 nginx 反向代理
 websockify --web=/usr/share/novnc 6080 127.0.0.1:5900 &
+WEBSOCKIFY_PID=$!
 sleep 1
 
-nginx
-
 # MCP 服务运行在容器内部 8081，由 nginx 的 /mcp 暴露
-PORT=8081 exec python main.py
+PORT=8081 python main.py &
+MCP_PID=$!
+
+# nginx 必须持续监听 Zeabur 对外暴露的 8080；使用前台模式并纳入进程监控
+nginx -g 'daemon off;' &
+NGINX_PID=$!
+
+cleanup() {
+    trap - EXIT INT TERM
+    kill "$NGINX_PID" "$MCP_PID" "$WEBSOCKIFY_PID" "$VNC_PID" "$XVFB_PID" 2>/dev/null || true
+    wait "$NGINX_PID" "$MCP_PID" "$WEBSOCKIFY_PID" "$VNC_PID" "$XVFB_PID" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# 任一关键进程退出，都让容器退出并由 Zeabur 自动重启，避免表面运行却持续 502
+while :; do
+    kill -0 "$XVFB_PID" 2>/dev/null || fail "Xvfb exited unexpectedly"
+    kill -0 "$VNC_PID" 2>/dev/null || fail "x11vnc exited unexpectedly"
+    kill -0 "$WEBSOCKIFY_PID" 2>/dev/null || fail "websockify exited unexpectedly"
+    kill -0 "$MCP_PID" 2>/dev/null || fail "MCP server exited unexpectedly"
+    kill -0 "$NGINX_PID" 2>/dev/null || fail "nginx exited unexpectedly"
+    sleep 2
+done
