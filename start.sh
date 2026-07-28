@@ -45,6 +45,44 @@ envsubst '${MCP_TOKEN}' \
 
 nginx -t
 
+NGINX_PID=""
+XVFB_PID=""
+VNC_PID=""
+WEBSOCKIFY_PID=""
+MCP_PID=""
+
+cleanup() {
+    trap - EXIT INT TERM
+    for pid in "$NGINX_PID" "$MCP_PID" "$WEBSOCKIFY_PID" "$VNC_PID" "$XVFB_PID"; do
+        if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null || true
+        fi
+    done
+    for pid in "$NGINX_PID" "$MCP_PID" "$WEBSOCKIFY_PID" "$VNC_PID" "$XVFB_PID"; do
+        if [ -n "$pid" ]; then
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
+}
+trap cleanup EXIT INT TERM
+
+# 先启动公网入口。Zeabur 的启动探针会很早访问 /health，
+# 因此不能等 Xvfb、VNC 和 Chromium 相关服务全部启动后才监听 8080。
+nginx -g 'daemon off;' &
+NGINX_PID=$!
+
+# 确认 nginx 已经能够立即响应健康检查。
+HEALTH_READY=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=1).read()" >/dev/null 2>&1; then
+        HEALTH_READY=true
+        break
+    fi
+    sleep 0.2
+done
+[ "$HEALTH_READY" = true ] || fail "nginx health endpoint did not become ready"
+echo "[startup] nginx health endpoint ready on :8080"
+
 # 启动虚拟显示器
 Xvfb :99 -screen 0 1280x900x24 &
 XVFB_PID=$!
@@ -71,23 +109,12 @@ sleep 1
 PORT=8081 python main.py &
 MCP_PID=$!
 
-# nginx 必须持续监听 Zeabur 对外暴露的 8080；使用前台模式并纳入进程监控
-nginx -g 'daemon off;' &
-NGINX_PID=$!
-
-cleanup() {
-    trap - EXIT INT TERM
-    kill "$NGINX_PID" "$MCP_PID" "$WEBSOCKIFY_PID" "$VNC_PID" "$XVFB_PID" 2>/dev/null || true
-    wait "$NGINX_PID" "$MCP_PID" "$WEBSOCKIFY_PID" "$VNC_PID" "$XVFB_PID" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
-
 # 任一关键进程退出，都让容器退出并由 Zeabur 自动重启，避免表面运行却持续 502
 while :; do
+    kill -0 "$NGINX_PID" 2>/dev/null || fail "nginx exited unexpectedly"
     kill -0 "$XVFB_PID" 2>/dev/null || fail "Xvfb exited unexpectedly"
     kill -0 "$VNC_PID" 2>/dev/null || fail "x11vnc exited unexpectedly"
     kill -0 "$WEBSOCKIFY_PID" 2>/dev/null || fail "websockify exited unexpectedly"
     kill -0 "$MCP_PID" 2>/dev/null || fail "MCP server exited unexpectedly"
-    kill -0 "$NGINX_PID" 2>/dev/null || fail "nginx exited unexpectedly"
     sleep 2
 done
