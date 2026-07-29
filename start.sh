@@ -10,7 +10,7 @@ export DISPLAY=:99
 sleep 3
  
 # 启动 VNC 服务
-x11vnc -display :99 -nopw -forever -shared -rfbport 5900 &
+x11vnc -display :99 -nopw -forever -shared -noxdamage -rfbport 5900 &
 sleep 2
  
 # 启动 noVNC
