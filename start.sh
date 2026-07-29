@@ -3,6 +3,12 @@
 # 把临时目录重定向到可写路径
 mkdir -p /data/tmp
 export TMPDIR=/data/tmp
+
+# 清理上一个 Zeabur 容器遗留的 Chromium 临时锁
+mkdir -p /data/browser-profile
+rm -f /data/browser-profile/SingletonLock
+rm -f /data/browser-profile/SingletonSocket
+rm -f /data/browser-profile/SingletonCookie
  
 # 启动虚拟显示器
 Xvfb :99 -screen 0 1280x900x24 &
